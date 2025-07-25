@@ -3,6 +3,7 @@ package erz
 import (
 	"errors"
 	"google.golang.org/grpc/status"
+	"net/http"
 	"runtime"
 	"strings"
 )
@@ -53,6 +54,7 @@ type Error interface {
 	WithValidationErrors(errs []ValidationError) Error
 	WithStackTrace() Error
 	Unwrap() error
+	WriteHTTPError(w http.ResponseWriter, opts *HTTPOptions) error
 }
 
 type Er struct {
