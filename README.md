@@ -11,12 +11,12 @@
 - **Typed Error Codes** - Consistent error classification with predefined codes
 - **Rich Validation Errors** - Collect and manage multiple field validation errors
 - **Automatic Stack Traces** - Debug errors with precise location information
-- **Dual Error Messages** - Technical logs and user-friendly public messages
-- **HTTP Integration** - Direct mapping to HTTP status codes (400, 404, 500, etc.)
+- **Structured Error Messages** - Separate message and detail fields for flexible error handling
+- **HTTP Integration** - Direct mapping to HTTP status codes with JSON response support
 - **gRPC Support** - Full gRPC status integration with detailed error information
 - **Immutable Design** - Safe error modification without side effects
-- **Type-Safe Helpers** - Convenient functions for error type checking
-- **Validation Collector** - Streamlined validation error aggregation
+- **Multiple Error Wrapping** - Chain multiple errors for comprehensive context
+- **JSON Serialization** - Built-in JSON output for API responses
 
 ## 📦 Installation
 
@@ -37,50 +37,60 @@ import (
 )
 
 func main() {
-    // Create common HTTP-mapped errors
-    notFoundErr := erz.NotFound("user")           // 404 Not Found
-    badRequestErr := erz.InvalidInput("email")    // 400 Bad Request
-    serverErr := erz.Internal("database error")   // 500 Internal Server Error
+    err := erz.New(erz.CodeNotFound, "user not found")
     
-    fmt.Println(notFoundErr.Error())      // Technical message for logs
-    fmt.Println(notFoundErr.PublicError()) // User-friendly message
-    fmt.Println(notFoundErr.HTTPStatus())  // 404
+    fmt.Println(err.Error())         // "user not found"
+    fmt.Println(err.GetMessage())    // "user not found"
+    fmt.Println(err.HTTPStatus())    // 404
+    
+    errWithDetail := err.WithDetail("user with ID 123 does not exist")
+    fmt.Println(errWithDetail.GetDetail()) // "user with ID 123 does not exist"
 }
 ```
 
-### Validation Error Collection
+### Validation Errors
 
 ```go
 func validateUser(user User) error {
-    vc := erz.CollectValidationErrors()
+    var validationErrors []erz.ValidationError
     
     if !isValidEmail(user.Email) {
-        vc.Add("email", "must be a valid email address", user.Email)
+        validationErrors = append(validationErrors, erz.ValidationError{
+            Field:   "email",
+            Message: "must be a valid email address",
+            Value:   user.Email,
+        })
     }
     
     if user.Age < 18 {
-        vc.Add("age", "must be at least 18 years old", user.Age)
+        validationErrors = append(validationErrors, erz.ValidationError{
+            Field:   "age", 
+            Message: "must be at least 18 years old",
+            Value:   user.Age,
+        })
     }
     
-    if len(user.Name) < 2 {
-        vc.Add("name", "must be at least 2 characters long", user.Name)
-    }
-    
-    // Return all validation errors as a single error
-    if vc.HasErrors() {
-        return vc.Error()
+    if len(validationErrors) > 0 {
+        return erz.New(erz.CodeValidation, "validation failed").
+            WithValidationErrors(validationErrors...)
     }
     
     return nil
 }
 ```
 
-### Single Validation Errors
+### Error Wrapping
 
 ```go
-// Create individual validation errors
-emailErr := erz.ValidationSingle("email", "invalid format", "invalid@example")
-ageErr := erz.ValidationSingle("age", "must be positive", -5)
+func processUser(id string) error {
+    user, err := database.GetUser(id)
+    if err != nil {
+        return erz.Wrap(err, erz.CodeInternal, "failed to get user").
+            WithDetail(fmt.Sprintf("database query failed for user ID: %s", id))
+    }
+    
+    return nil
+}
 ```
 
 ## 🔧 Core Interface
@@ -89,39 +99,36 @@ The main `Error` interface provides comprehensive error handling capabilities:
 
 ```go
 type Error interface {
-    // Standard error interface
+    erz()
     Error() string
-    
-    // Core properties
     Code() ErrorCode
     HTTPStatus() int
     GRPCStatus() *status.Status
-    PublicError() string
-    
-    // Error details
-    GetValidationErrors() []ValidationError
+    GetMessage() string
+    GetDetail() string
     GetStackTrace() []StackFrame
-    
-    // Immutable modifications
+    GetValidationErrors() []ValidationError
     WithDetail(detail string) Error
-    WithPublicMessage(msg string) Error
     WithWrapped(err error) Error
-    WithValidationError(field, msg string, value any) Error
+    WithValidationErrors(errs ...ValidationError) Error
     WithStackTrace() Error
+    Unwrap() error
+    ToHTTPResponse(options *HTTPOptions) *HTTPResponse
+    AsJSON(options *HTTPOptions) []byte
 }
 ```
 
 ## 🌐 HTTP Integration
 
-### Converting Errors to HTTP Status Codes
+### Converting Errors to HTTP Responses
 
 ```go
 func handleUserRequest(w http.ResponseWriter, r *http.Request) {
     user, err := getUserByID(userID)
     if err != nil {
-        // Automatically get appropriate HTTP status
-        status := err.HTTPStatus() // 404, 400, 500, etc.
-        http.Error(w, err.PublicError(), status)
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(err.HTTPStatus())
+        w.Write(err.AsJSON(nil))
         return
     }
     
@@ -129,11 +136,19 @@ func handleUserRequest(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-### Creating Errors from HTTP Status
+### Using HTTP Response Helper
 
 ```go
-err := erz.FromHTTPStatus(404, "user not found")
-err := erz.FromHTTPStatus(429, "rate limit exceeded")
+func handleError(w http.ResponseWriter, err erz.Error) {
+    httpResponse := err.ToHTTPResponse(&erz.HTTPOptions{
+        IncludeStackTrace: false,
+        IncludeDetails:    true,
+    })
+    
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(httpResponse.Status)
+    w.Write(httpResponse.Body)
+}
 ```
 
 ## 🔌 gRPC Integration
@@ -144,21 +159,10 @@ err := erz.FromHTTPStatus(429, "rate limit exceeded")
 func GetUser(ctx context.Context, req *pb.GetUserRequest) (*pb.User, error) {
     user, err := userService.GetUser(req.Id)
     if err != nil {
-        // Convert to gRPC status with rich details
         return nil, err.GRPCStatus().Err()
     }
     
     return user, nil
-}
-```
-
-### Creating Errors from gRPC Status
-
-```go
-// Convert gRPC status back to erz.Error
-if st, ok := status.FromError(err); ok {
-    erzErr := erz.FromGRPCStatusWithDetails(st)
-    // Now you have full access to validation errors, stack trace, etc.
 }
 ```
 
@@ -172,8 +176,7 @@ if erz.IsNotFound(err) {
 }
 
 if erz.IsValidation(err) {
-    // Handle validation errors
-    validationErrors := erz.GetValidationErrors(err)
+    validationErrors := err.GetValidationErrors()
     for _, vErr := range validationErrors {
         fmt.Printf("Field: %s, Message: %s, Value: %v\n", 
             vErr.Field, vErr.Message, vErr.Value)
@@ -181,17 +184,24 @@ if erz.IsValidation(err) {
 }
 
 if erz.IsInternal(err) {
-    // Log internal errors but don't expose details to users
-    log.Error("Internal error", "error", err.Error())
+    log.Error("Internal error", "error", err.Error(), "detail", err.GetDetail())
 }
 ```
 
-### Stack Trace Extraction
+### Stack Trace Access
 
 ```go
-stackFrames := erz.GetStackTrace(err)
+stackFrames := err.GetStackTrace()
 for _, frame := range stackFrames {
     fmt.Printf("%s:%d in %s\n", frame.File, frame.Line, frame.Function)
+}
+```
+
+### Error Unwrapping
+
+```go
+if wrappedErr := errors.Unwrap(err); wrappedErr != nil {
+    fmt.Printf("Original error: %v\n", wrappedErr)
 }
 ```
 
@@ -203,16 +213,20 @@ for _, frame := range stackFrames {
 func createUser(w http.ResponseWriter, r *http.Request) {
     var user User
     if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
-        apiErr := erz.InvalidInput("request body").
-            WithDetail("invalid JSON format").
-            WithPublicMessage("Please provide valid user data")
+        apiErr := erz.New(erz.CodeInvalidInput, "invalid request body").
+            WithDetail("failed to parse JSON").
+            WithWrapped(err)
         
-        http.Error(w, apiErr.PublicError(), apiErr.HTTPStatus())
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(apiErr.HTTPStatus())
+        w.Write(apiErr.AsJSON(nil))
         return
     }
     
     if err := validateUser(user); err != nil {
-        http.Error(w, err.PublicError(), err.HTTPStatus())
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(err.HTTPStatus())
+        w.Write(err.AsJSON(nil))
         return
     }
     
@@ -225,13 +239,12 @@ func createUser(w http.ResponseWriter, r *http.Request) {
 ```go
 func (s *UserService) CreateUser(user User) error {
     if err := s.validateUser(user); err != nil {
-        return err // Validation errors bubble up
+        return err
     }
     
     if err := s.repo.Create(user); err != nil {
-        return erz.Internal("failed to create user").
-            WithDetail(fmt.Sprintf("database error: %v", err)).
-            WithPublicMessage("Unable to create user at this time").
+        return erz.Wrap(err, erz.CodeInternal, "failed to create user").
+            WithDetail("database operation failed").
             WithStackTrace()
     }
     
@@ -239,48 +252,46 @@ func (s *UserService) CreateUser(user User) error {
 }
 ```
 
-### Complex Validation with Multiple Checks
+### Complex Validation
 
 ```go
 func validateOrderRequest(req OrderRequest) error {
-    vc := erz.CollectValidationErrors()
+    var validationErrors []erz.ValidationError
     
-    // Validate items
     if len(req.Items) == 0 {
-        vc.Add("items", "at least one item is required", req.Items)
+        validationErrors = append(validationErrors, erz.ValidationError{
+            Field:   "items",
+            Message: "at least one item is required",
+            Value:   req.Items,
+        })
     }
     
     for i, item := range req.Items {
         if item.Quantity <= 0 {
-            vc.Add(fmt.Sprintf("items[%d].quantity", i), 
-                "must be greater than 0", item.Quantity)
-        }
-        if item.Price < 0 {
-            vc.Add(fmt.Sprintf("items[%d].price", i), 
-                "cannot be negative", item.Price)
+            validationErrors = append(validationErrors, erz.ValidationError{
+                Field:   fmt.Sprintf("items[%d].quantity", i),
+                Message: "must be greater than 0",
+                Value:   item.Quantity,
+            })
         }
     }
     
-    // Validate shipping
     if req.ShippingAddress == "" {
-        vc.Add("shipping_address", "is required", req.ShippingAddress)
+        validationErrors = append(validationErrors, erz.ValidationError{
+            Field:   "shipping_address",
+            Message: "is required",
+            Value:   req.ShippingAddress,
+        })
     }
     
-    return vc.ErrorOrNil() // Returns nil if no errors
+    if len(validationErrors) > 0 {
+        return erz.New(erz.CodeValidation, "validation failed").
+            WithValidationErrors(validationErrors...)
+    }
+    
+    return nil
 }
 ```
-
-## 📊 Error Code Reference
-
-| Error Code | HTTP Status | Description |
-|------------|-------------|-------------|
-| `NotFound` | 404 | Resource not found |
-| `InvalidInput` | 400 | Bad request/validation error |
-| `Unauthorized` | 401 | Authentication required |
-| `Forbidden` | 403 | Access denied |
-| `Conflict` | 409 | Resource conflict |
-| `Internal` | 500 | Internal server error |
-| `Validation` | 400 | Field validation errors |
 
 ## 🏗️ Architecture Benefits
 
@@ -288,18 +299,20 @@ func validateOrderRequest(req OrderRequest) error {
 
 1. **Consistency** - Standardized error handling across your entire application
 2. **Debugging** - Rich context with stack traces and detailed messages
-3. **User Experience** - Clean, user-friendly error messages for APIs
+3. **API-Ready** - Built-in JSON serialization and HTTP response helpers
 4. **Protocol Agnostic** - Works seamlessly with HTTP REST and gRPC services
 5. **Type Safety** - Leverage Go's type system for robust error handling
 6. **Maintainability** - Immutable design prevents accidental error modification
+7. **Flexible** - Separate message and detail fields for different use cases
 
 ### Best Practices
 
-- Use validation collectors for complex input validation
-- Always include stack traces for internal errors
-- Provide meaningful public messages for user-facing errors
-- Leverage helper functions for error type checking
+- Use validation errors for input validation scenarios
+- Use `WithDetail()` to add context without changing the main error message
+- Leverage `WithWrapped()` to preserve original error information
+- Use `AsJSON()` for consistent API error responses
 - Chain error modifications for rich context
+- Write your custom middlewares for cleaner code
 
 ---
 
