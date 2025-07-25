@@ -1,9 +1,5 @@
 # erz - Enhanced Error Handling for Go
 
-[![Go Version](https://img.shields.io/badge/Go-%3E%3D%201.19-blue.svg)](https://golang.org/)
-[![GoDoc](https://godoc.org/github.com/intezya/erz?status.svg)](https://godoc.org/github.com/intezya/erz)
-[![Go Report Card](https://goreportcard.com/badge/github.com/intezya/erz)](https://goreportcard.com/report/github.com/intezya/erz)
-
 `erz` is a comprehensive Go package that transforms error handling with rich context, structured validation errors, automatic stack traces, and seamless HTTP/gRPC integration. Build robust APIs with consistent, user-friendly error responses.
 
 ## 🚀 Features
