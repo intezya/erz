@@ -13,7 +13,7 @@ import (
 func (e *Er) GRPCStatus() *status.Status {
 	var code codes.Code
 
-	switch e.ErrCode {
+	switch e.errCode {
 	case CodeInvalidInput, CodeValidation:
 		code = codes.InvalidArgument
 	case CodeNotFound:
@@ -36,14 +36,14 @@ func (e *Er) GRPCStatus() *status.Status {
 		code = codes.Unknown
 	}
 
-	msg := e.PublicError()
+	msg := e.message
 	st := status.New(code, msg)
 
 	details := make([]protoadapt.MessageV1, 0)
 
-	if len(e.ValidationErrors) > 0 {
+	if len(e.validationErrors) > 0 {
 		br := &errdetails.BadRequest{}
-		for _, ve := range e.ValidationErrors {
+		for _, ve := range e.validationErrors {
 			br.FieldViolations = append(
 				br.FieldViolations, &errdetails.BadRequest_FieldViolation{
 					Field:       ve.Field,
@@ -54,21 +54,21 @@ func (e *Er) GRPCStatus() *status.Status {
 		details = append(details, br)
 	}
 
-	if e.Detail != "" || e.Message != "" {
+	if e.detail != "" || e.message != "" {
 		ei := &errdetails.ErrorInfo{
-			Reason: string(e.ErrCode),
+			Reason: string(e.errCode),
 			Domain: "???",
 			Metadata: map[string]string{
-				"detail":  e.Detail,
-				"message": e.Message,
+				"detail":  e.detail,
+				"message": e.message,
 			},
 		}
 		details = append(details, ei)
 	}
 
-	if len(e.StackTrace) > 0 {
-		stackEntries := make([]string, 0, len(e.StackTrace))
-		for _, frame := range e.StackTrace {
+	if len(e.stackTrace) > 0 {
+		stackEntries := make([]string, 0, len(e.stackTrace))
+		for _, frame := range e.stackTrace {
 			stackEntries = append(stackEntries, fmt.Sprintf("%s:%d %s", frame.File, frame.Line, frame.Function))
 		}
 
@@ -79,9 +79,9 @@ func (e *Er) GRPCStatus() *status.Status {
 		details = append(details, di)
 	}
 
-	if len(e.Wrapped) > 0 {
+	if len(e.wrapped) > 0 {
 		help := &errdetails.Help{}
-		for i, wrappedErr := range e.Wrapped {
+		for i, wrappedErr := range e.wrapped {
 			help.Links = append(
 				help.Links, &errdetails.Help_Link{
 					Description: fmt.Sprintf("Wrapped error %d", i+1),
@@ -156,16 +156,16 @@ func FromGRPCStatusWithDetails(st *status.Status) Error {
 	}
 
 	err := &Er{
-		ErrCode: code,
-		Message: st.Message(),
+		errCode: code,
+		message: st.Message(),
 	}
 
 	for _, detail := range st.Details() {
 		switch d := detail.(type) {
 		case *errdetails.BadRequest:
 			for _, fv := range d.FieldViolations {
-				err.ValidationErrors = append(
-					err.ValidationErrors, ValidationError{
+				err.validationErrors = append(
+					err.validationErrors, ValidationError{
 						Field:   fv.Field,
 						Message: fv.Description,
 					},
@@ -173,10 +173,10 @@ func FromGRPCStatusWithDetails(st *status.Status) Error {
 			}
 		case *errdetails.ErrorInfo:
 			if detail, exists := d.Metadata["detail"]; exists {
-				err.Detail = detail
+				err.detail = detail
 			}
-			if message, exists := d.Metadata["message"]; exists && err.Message == "" {
-				err.Message = message
+			if message, exists := d.Metadata["message"]; exists && err.message == "" {
+				err.message = message
 			}
 		case *errdetails.DebugInfo:
 			for _, entry := range d.StackEntries {
@@ -184,8 +184,8 @@ func FromGRPCStatusWithDetails(st *status.Status) Error {
 				if len(parts) >= 2 {
 					fileLineparts := strings.Split(parts[0], ":")
 					if len(fileLineparts) >= 2 {
-						err.StackTrace = append(
-							err.StackTrace, StackFrame{
+						err.stackTrace = append(
+							err.stackTrace, StackFrame{
 								Function: parts[1],
 								File:     fileLineparts[0],
 								Line:     parseInt(fileLineparts[1]),
@@ -196,7 +196,7 @@ func FromGRPCStatusWithDetails(st *status.Status) Error {
 			}
 		case *errdetails.Help:
 			for _, link := range d.Links {
-				err.Wrapped = append(err.Wrapped, errors.New(link.Url))
+				err.wrapped = append(err.wrapped, errors.New(link.Url))
 			}
 		}
 	}

@@ -25,11 +25,11 @@ func Unauthenticated() Error {
 }
 
 func Internal(message string) Error {
-	return NewWithStack(CodeInternal, message)
+	return New(CodeInternal, message)
 }
 
 func InternalWithCause(message string, cause error) Error {
-	return WrapWithStack(cause, CodeInternal, message)
+	return Wrap(cause, CodeInternal, message)
 }
 
 func Validation(message string) Error {
@@ -38,9 +38,9 @@ func Validation(message string) Error {
 
 func ValidationSingle(field, message string, value any) Error {
 	return &Er{
-		ErrCode: CodeValidation,
-		Message: fmt.Sprintf("validation failed for field: %s", field),
-		ValidationErrors: []ValidationError{
+		errCode: CodeValidation,
+		message: fmt.Sprintf("validation failed for field: %s", field),
+		validationErrors: []ValidationError{
 			{
 				Field:   field,
 				Message: message,
@@ -51,8 +51,8 @@ func ValidationSingle(field, message string, value any) Error {
 }
 
 func DatabaseError(operation string, err error) Error {
-	return Wrap(err, CodeInternal, fmt.Sprintf("database operation failed: %s", operation)).
-		WithPublicMessage("Database operation failed")
+	return Wrap(err, CodeInternal, "Database operation failed").
+		WithDetail(fmt.Sprintf("database operation failed: %s", operation))
 }
 
 func InvalidCredentials(message string) Error {

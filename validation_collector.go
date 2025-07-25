@@ -2,9 +2,9 @@ package erz
 
 func ValidationWithErrors(message string, validationErrors []ValidationError) Error {
 	return &Er{
-		ErrCode:          CodeValidation,
-		Message:          message,
-		ValidationErrors: validationErrors,
+		errCode:          CodeValidation,
+		message:          message,
+		validationErrors: validationErrors,
 	}
 }
 

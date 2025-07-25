@@ -2,39 +2,18 @@ package erz
 
 import (
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"time"
 )
 
-type Encoder interface {
-	Encode(v interface{}) error
-}
-
-type Serializer interface {
-	Marshal(v interface{}) ([]byte, error)
-	NewEncoder(w io.Writer) Encoder
-}
-
-type JSONSerializer struct{}
-
-func (j JSONSerializer) Marshal(v interface{}) ([]byte, error) {
-	return json.Marshal(v)
-}
-
-func (j JSONSerializer) NewEncoder(w io.Writer) Encoder {
-	return json.NewEncoder(w)
-}
-
-var DefaultSerializer Serializer = JSONSerializer{}
+type Marshal func(v interface{}) ([]byte, error)
 
 type HTTPResponse struct {
 	Success   bool               `json:"success"`
 	Error     *HTTPErrorResponse `json:"error,omitempty"`
 	Data      interface{}        `json:"data,omitempty"`
 	Meta      *HTTPResponseMeta  `json:"meta,omitempty"`
-	Timestamp time.Time          `json:"timestamp"`
+	Timestamp time.Time          `json:"timestamp,omitempty"`
 	RequestID string             `json:"request_id,omitempty"`
 	TraceID   string             `json:"trace_id,omitempty"`
 }
@@ -70,19 +49,19 @@ type HTTPOptions struct {
 	TraceID           string
 	Version           string
 	Metadata          map[string]interface{}
-	Serializer        Serializer
+	Marshal           Marshal
 }
 
 func DefaultHTTPOptions() *HTTPOptions {
 	return &HTTPOptions{
 		IncludeStackTrace: false,
 		IncludeTimestamp:  true,
-		Serializer:        DefaultSerializer,
+		Marshal:           json.Marshal,
 	}
 }
 
 func (e *Er) HTTPStatus() int {
-	switch e.ErrCode {
+	switch e.errCode {
 	case CodeInvalidInput, CodeValidation:
 		return http.StatusBadRequest
 	case CodeNotFound:
@@ -106,21 +85,21 @@ func (e *Er) HTTPStatus() int {
 	}
 }
 
-func (e *Er) ToHTTPResponse(opts *HTTPOptions) *HTTPResponse {
-	if opts == nil {
-		opts = DefaultHTTPOptions()
+func (e *Er) ToHTTPResponse(options *HTTPOptions) *HTTPResponse {
+	if options == nil {
+		options = DefaultHTTPOptions()
 	}
 
 	errorResp := &HTTPErrorResponse{
-		Code:             string(e.ErrCode),
-		Message:          e.PublicError(),
-		Detail:           e.Detail,
-		ValidationErrors: e.ValidationErrors,
-		Metadata:         opts.Metadata,
+		Code:             string(e.errCode),
+		Message:          e.message,
+		Detail:           e.detail,
+		ValidationErrors: e.validationErrors,
+		Metadata:         options.Metadata,
 	}
 
-	if opts.IncludeStackTrace && len(e.StackTrace) > 0 {
-		errorResp.StackTrace = e.StackTrace
+	if options.IncludeStackTrace && len(e.stackTrace) > 0 {
+		errorResp.StackTrace = e.stackTrace
 	}
 
 	response := &HTTPResponse{
@@ -128,56 +107,37 @@ func (e *Er) ToHTTPResponse(opts *HTTPOptions) *HTTPResponse {
 		Error:   errorResp,
 	}
 
-	if opts.IncludeTimestamp {
+	if options.IncludeTimestamp {
 		response.Timestamp = time.Now().UTC()
 	}
 
-	if opts.RequestID != "" {
-		response.RequestID = opts.RequestID
+	if options.RequestID != "" {
+		response.RequestID = options.RequestID
 	}
 
-	if opts.TraceID != "" {
-		response.TraceID = opts.TraceID
+	if options.TraceID != "" {
+		response.TraceID = options.TraceID
 	}
 
-	if opts.Version != "" {
+	if options.Version != "" {
 		if response.Meta == nil {
 			response.Meta = &HTTPResponseMeta{}
 		}
-		response.Meta.Version = opts.Version
+		response.Meta.Version = options.Version
 	}
 
 	return response
 }
 
-func (e *Er) WriteHTTPError(w http.ResponseWriter, opts *HTTPOptions) error {
-	if opts == nil {
-		opts = DefaultHTTPOptions()
+func (e *Er) AsJSON(options *HTTPOptions) []byte {
+	if options == nil {
+		options = DefaultHTTPOptions()
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(e.HTTPStatus())
+	response := e.ToHTTPResponse(options)
 
-	response := e.ToHTTPResponse(opts)
-	encoder := opts.Serializer.NewEncoder(w)
-	return encoder.Encode(response)
-}
-
-func (e *Er) ToJSON(opts *HTTPOptions) ([]byte, error) {
-	if opts == nil {
-		opts = DefaultHTTPOptions()
-	}
-
-	response := e.ToHTTPResponse(opts)
-	return opts.Serializer.Marshal(response)
-}
-
-func (e *Er) ToJSONString(opts *HTTPOptions) (string, error) {
-	jsonBytes, err := e.ToJSON(opts)
-	if err != nil {
-		return "", err
-	}
-	return string(jsonBytes), nil
+	bytes, _ := options.Marshal(response)
+	return bytes
 }
 
 func FromHTTPStatus(status int, message string) Error {
@@ -207,9 +167,9 @@ func FromHTTPStatus(status int, message string) Error {
 	return New(code, message)
 }
 
-func CreateSuccessResponse(data interface{}, opts *HTTPOptions) *HTTPResponse {
-	if opts == nil {
-		opts = DefaultHTTPOptions()
+func CreateSuccessResponse(data interface{}, options *HTTPOptions) *HTTPResponse {
+	if options == nil {
+		options = DefaultHTTPOptions()
 	}
 
 	response := &HTTPResponse{
@@ -217,39 +177,26 @@ func CreateSuccessResponse(data interface{}, opts *HTTPOptions) *HTTPResponse {
 		Data:    data,
 	}
 
-	if opts.IncludeTimestamp {
+	if options.IncludeTimestamp {
 		response.Timestamp = time.Now().UTC()
 	}
 
-	if opts.RequestID != "" {
-		response.RequestID = opts.RequestID
+	if options.RequestID != "" {
+		response.RequestID = options.RequestID
 	}
 
-	if opts.TraceID != "" {
-		response.TraceID = opts.TraceID
+	if options.TraceID != "" {
+		response.TraceID = options.TraceID
 	}
 
-	if opts.Version != "" {
+	if options.Version != "" {
 		if response.Meta == nil {
 			response.Meta = &HTTPResponseMeta{}
 		}
-		response.Meta.Version = opts.Version
+		response.Meta.Version = options.Version
 	}
 
 	return response
-}
-
-func WriteSuccessResponse(w http.ResponseWriter, data interface{}, opts *HTTPOptions) error {
-	if opts == nil {
-		opts = DefaultHTTPOptions()
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	response := CreateSuccessResponse(data, opts)
-	encoder := opts.Serializer.NewEncoder(w)
-	return encoder.Encode(response)
 }
 
 func (r *HTTPResponse) WithPagination(page, perPage, total int) *HTTPResponse {
@@ -282,57 +229,11 @@ func (r *HTTPResponse) WithHeaders(headers map[string]string) *HTTPResponse {
 	return r
 }
 
-type HTTPErrorHandler func(Error, http.ResponseWriter, *http.Request, *HTTPOptions)
-
-func DefaultHTTPErrorHandler(err Error, w http.ResponseWriter, r *http.Request, opts *HTTPOptions) {
-	if opts == nil {
-		opts = &HTTPOptions{
-			IncludeStackTrace: false,
-			IncludeTimestamp:  true,
-			RequestID:         r.Header.Get("X-Request-ID"),
-			TraceID:           r.Header.Get("X-Trace-ID"),
-			Serializer:        DefaultSerializer,
-		}
+func (r *HTTPResponse) AsJSON(options *HTTPOptions) []byte {
+	if options == nil {
+		options = DefaultHTTPOptions()
 	}
 
-	var erzErr *Er
-	if errors.As(err, &erzErr) {
-		erzErr.WriteHTTPError(w, opts)
-	} else {
-		genericErr := InternalWithCause("Internal server error", err)
-		genericErr.WriteHTTPError(w, opts)
-	}
-}
-
-func HTTPMiddleware(handler http.Handler, errorHandler HTTPErrorHandler, opts *HTTPOptions) http.Handler {
-	if errorHandler == nil {
-		errorHandler = DefaultHTTPErrorHandler
-	}
-
-	return http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					var err Error
-
-					switch e := recovered.(type) {
-					case Error:
-						err = e
-					case error:
-						err = Wrap(e, CodeInternal, "Panic recovered")
-					default:
-						err = Internal("Unknown panic recovered")
-					}
-
-					errorHandler(err, w, r, opts)
-				}
-			}()
-
-			handler.ServeHTTP(w, r)
-		},
-	)
-}
-
-func SetDefaultSerializer(serializer Serializer) {
-	DefaultSerializer = serializer
+	bytes, _ := options.Marshal(r)
+	return bytes
 }
